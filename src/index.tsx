@@ -3,7 +3,7 @@
 import React, { forwardRef } from 'react';
 import ReactDOM from 'react-dom';
 
-import { CloseIcon, getAsset, Loader } from './assets';
+import { CloseIcon, getAsset } from './assets';
 import { useIsDocumentHidden } from './hooks';
 import { toast, ToastState } from './state';
 import {
@@ -79,9 +79,14 @@ const Toast = (props: ToastProps) => {
 	const [isSwiped, setIsSwiped] = React.useState(false);
 	const [offsetBeforeRemove, setOffsetBeforeRemove] = React.useState(0);
 	const [initialHeight, setInitialHeight] = React.useState(0);
+	const [remainingTimeState, setRemainingTimeState] = React.useState(toast.duration || durationFromToaster || TOAST_LIFETIME);
 	const remainingTime = React.useRef(toast.duration || durationFromToaster || TOAST_LIFETIME);
 	const dragStartTime = React.useRef<Date | null>(null);
 	const toastRef = React.useRef<HTMLLIElement>(null);
+	const closeTimerStartTimeRef = React.useRef(0);
+	const lastCloseTimerStartTimeRef = React.useRef(0);
+	const totalElapsedRef = React.useRef(0);
+	const pointerStartRef = React.useRef<{ x: number; y: number; } | null>(null);
 	const isFront = index === 0;
 	const isVisible = index + 1 <= visibleToasts;
 	const toastType = toast.type;
@@ -101,10 +106,7 @@ const Toast = (props: ToastProps) => {
 		() => toast.duration || durationFromToaster || TOAST_LIFETIME,
 		[toast.duration, durationFromToaster],
 	);
-	const closeTimerStartTimeRef = React.useRef(0);
 	const offset = React.useRef(0);
-	const lastCloseTimerStartTimeRef = React.useRef(0);
-	const pointerStartRef = React.useRef<{ x: number; y: number; } | null>(null);
 	const [y, x] = position.split('-');
 	const toastsHeightBefore = React.useMemo(() => {
 		return heights.reduce((prev, curr, reducerIndex) => {
@@ -173,58 +175,71 @@ const Toast = (props: ToastProps) => {
 	React.useEffect(() => {
 		if ((toast.promise && toastType === 'loading') || toast.duration === Infinity || toast.type === 'loading') return;
 		let timeoutId: NodeJS.Timeout;
+		let animationFrameId: number;
 
 		// Pause the timer on each hover
 		const pauseTimer = () => {
 			if (lastCloseTimerStartTimeRef.current < closeTimerStartTimeRef.current) {
-				// Get the elapsed time since the timer started
 				const elapsedTime = new Date().getTime() - closeTimerStartTimeRef.current;
-
-				remainingTime.current = remainingTime.current - elapsedTime;
+				totalElapsedRef.current += elapsedTime;
+				const newRemainingTime = Math.max(0, duration - totalElapsedRef.current);
+				remainingTime.current = newRemainingTime;
+				setRemainingTimeState(newRemainingTime);
 			}
-
 			lastCloseTimerStartTimeRef.current = new Date().getTime();
+			if (animationFrameId) {
+				cancelAnimationFrame(animationFrameId);
+			}
+			if (timeoutId) {
+				clearTimeout(timeoutId);
+			}
 		};
 
 		const startTimer = () => {
-			// setTimeout(, Infinity) behaves as if the delay is 0.
-			// As a result, the toast would be closed immediately, giving the appearance that it was never rendered.
-			// See: https://github.com/denysdovhan/wtfjs?tab=readme-ov-file#an-infinite-timeout
 			if (remainingTime.current === Infinity) return;
-
 			closeTimerStartTimeRef.current = new Date().getTime();
 
-			// Let the toast know it has started
+			const updateProgress = () => {
+				const elapsedTime = new Date().getTime() - closeTimerStartTimeRef.current;
+				const totalElapsed = totalElapsedRef.current + elapsedTime;
+				const newRemainingTime = Math.max(0, duration - totalElapsed);
+				remainingTime.current = newRemainingTime;
+				setRemainingTimeState(newRemainingTime);
+
+				if (newRemainingTime > 0) {
+					animationFrameId = requestAnimationFrame(updateProgress);
+				}
+			};
+
+			animationFrameId = requestAnimationFrame(updateProgress);
+
 			timeoutId = setTimeout(() => {
 				toast.onAutoClose?.(toast);
 				deleteToast();
-			}, remainingTime.current);
+			}, duration - totalElapsedRef.current);
 		};
 
 		if (expanded || interacting || (pauseWhenPageIsHidden && isDocumentHidden)) {
 			pauseTimer();
 		} else {
+			if (!remainingTime.current || remainingTime.current === Infinity) {
+				remainingTime.current = duration;
+				setRemainingTimeState(duration);
+			}
 			startTimer();
 		}
 
-		return () => clearTimeout(timeoutId);
-	}, [expanded, interacting, toast, toastType, pauseWhenPageIsHidden, isDocumentHidden, deleteToast]);
+		return () => {
+			timeoutId && clearTimeout(timeoutId);
+			animationFrameId && cancelAnimationFrame(animationFrameId);
+		};
+	}, [expanded, interacting, duration, deleteToast, toast, toastType, pauseWhenPageIsHidden, isDocumentHidden]);
 
 	React.useEffect(() => {
 		if (toast.delete) {
 			deleteToast();
 		}
 	}, [deleteToast, toast.delete]);
-
-	const [remaining, setRemaining] = React.useState(duration);
-
-	React.useEffect(() => {
-		const intervalId = setInterval(() => {
-			setRemaining((prev) => prev - 100);
-		}, 100);
-
-		return () => clearInterval(intervalId);
-	}, []);
 
 	function getLoadingIcon() {
 		if (icons?.loading) {
@@ -248,7 +263,7 @@ const Toast = (props: ToastProps) => {
 				</div>
 			);
 		}
-		return <Loader className={cn(classNames?.loader, toast?.classNames?.loader)} visible={toastType === 'loading'} />;
+		return null;
 	}
 
 	return (
@@ -358,94 +373,108 @@ const Toast = (props: ToastProps) => {
 					{icons?.close ?? CloseIcon}
 				</button>
 			) : null}
-			{/* TODO: This can be cleaner */}
-			{toast.jsx || React.isValidElement(toast.title) ? (
-				toast.jsx ? (
-					toast.jsx
-				) : typeof toast.title === 'function' ? (
-					toast.title()
-				) : (
-					toast.title
-				)
-			) : (
-				<>
-					{toastType || toast.icon || toast.promise ? (
-						<div data-icon="" className={cn(classNames?.icon, toast?.classNames?.icon)}>
-							{toast.promise || (toast.type === 'loading' && !toast.icon) ? toast.icon || getLoadingIcon() : null}
-							{toast.type !== 'loading' ? toast.icon || icons?.[toastType] || getAsset(toastType) : null}
-						</div>
-					) : null}
 
-					<div data-content="" className={cn(classNames?.content, toast?.classNames?.content)}>
-						<div data-title="" className={cn(classNames?.title, toast?.classNames?.title)}>
-							{typeof toast.title === 'function' ? toast.title() : toast.title}
-						</div>
-						{toast.description ? (
-							<div
-								data-description=""
-								className={cn(
-									descriptionClassName,
-									toastDescriptionClassname,
-									classNames?.description,
-									toast?.classNames?.description,
-								)}
-							>
-								{typeof toast.description === 'function' ? toast.description() : toast.description}
+			<div
+				data-content
+				style={{
+					position: 'relative',
+					width: '100%',
+					height: '100%',
+				}}
+			>
+				{toast.jsx || React.isValidElement(toast.title) ? (
+					toast.jsx ? (
+						toast.jsx
+					) : typeof toast.title === 'function' ? (
+						toast.title()
+					) : (
+						toast.title
+					)
+				) : (
+					<>
+						{toastType || toast.icon || toast.promise ? (
+							<div data-icon="" className={cn(classNames?.icon, toast?.classNames?.icon)}>
+								{toast.promise || (toast.type === 'loading' && !toast.icon) ? toast.icon || getLoadingIcon() : null}
+								{toast.type !== 'loading' ? toast.icon || icons?.[toastType] || getAsset(toastType) : null}
 							</div>
 						) : null}
-					</div>
-					{React.isValidElement(toast.cancel) ? (
-						toast.cancel
-					) : toast.cancel && isAction(toast.cancel) ? (
-						<button
-							data-button
-							data-cancel
-							style={toast.cancelButtonStyle || cancelButtonStyle}
-							onClick={(event) => {
-								// We need to check twice because typescript
-								if (!isAction(toast.cancel)) return;
-								if (!dismissible) return;
-								toast.cancel.onClick?.(event);
-								deleteToast();
-							}}
-							className={cn(classNames?.cancelButton, toast?.classNames?.cancelButton)}
-						>
-							{toast.cancel.label}
-						</button>
-					) : null}
-					{React.isValidElement(toast.action) ? (
-						toast.action
-					) : toast.action && isAction(toast.action) ? (
-						<button
-							data-button
-							data-action
-							style={toast.actionButtonStyle || actionButtonStyle}
-							onClick={(event) => {
-								// We need to check twice because typescript
-								if (!isAction(toast.action)) return;
-								toast.action.onClick?.(event);
-								if (event.defaultPrevented) return;
-								deleteToast();
-							}}
-							className={cn(classNames?.actionButton, toast?.classNames?.actionButton)}
-						>
-							{toast.action.label}
-						</button>
-					) : null}
-				</>
-			)}
+
+						<div data-content="" className={cn(classNames?.content, toast?.classNames?.content)}>
+							<div data-title="" className={cn(classNames?.title, toast?.classNames?.title)}>
+								{typeof toast.title === 'function' ? toast.title() : toast.title}
+							</div>
+							{toast.description ? (
+								<div
+									data-description=""
+									className={cn(
+										descriptionClassName,
+										toastDescriptionClassname,
+										classNames?.description,
+										toast?.classNames?.description,
+									)}
+								>
+									{typeof toast.description === 'function' ? toast.description() : toast.description}
+								</div>
+							) : null}
+							{React.isValidElement(toast.cancel) ? (
+								toast.cancel
+							) : toast.cancel && isAction(toast.cancel) ? (
+								<button
+									data-button
+									data-cancel
+									style={toast.cancelButtonStyle || cancelButtonStyle}
+									onClick={(event) => {
+										// We need to check twice because typescript
+										if (!isAction(toast.cancel)) return;
+										if (!dismissible) return;
+										toast.cancel.onClick?.(event);
+										deleteToast();
+									}}
+									className={cn(classNames?.cancelButton, toast?.classNames?.cancelButton)}
+								>
+									{toast.cancel.label}
+								</button>
+							) : null}
+							{React.isValidElement(toast.action) ? (
+								toast.action
+							) : toast.action && isAction(toast.action) ? (
+								<button
+									data-button
+									data-action
+									style={toast.actionButtonStyle || actionButtonStyle}
+									onClick={(event) => {
+										// We need to check twice because typescript
+										if (!isAction(toast.action)) return;
+										toast.action.onClick?.(event);
+										if (event.defaultPrevented) return;
+										deleteToast();
+									}}
+									className={cn(classNames?.actionButton, toast?.classNames?.actionButton)}
+								>
+									{toast.action.label}
+								</button>
+							) : null}
+						</div>
+					</>
+				)}
+			</div>
 			<div
+				data-progress
 				style={{
 					position: 'absolute',
 					bottom: 0,
 					left: 0,
 					right: 0,
-					height: '2px',
-					backgroundColor: 'var(--accent)',
+					height: '3px',
+					backgroundColor: 'var(--brand-500)',
 					transformOrigin: 'left',
-					transform: `scaleX(${remaining / duration})`,
-					transition: 'transform linear',
+					transform: `scaleX(${Math.max(0, remainingTimeState / duration)})`,
 					opacity: 0.8,
+					willChange: 'transform',
+					backfaceVisibility: 'hidden',
+					zIndex: 1,
+					borderBottomLeftRadius: 'inherit',
+					borderBottomRightRadius: 'inherit'
 				}}
 			/>
 		</li>
@@ -476,6 +505,8 @@ function useSonner() {
 				}
 
 				const existingToastIndex = currentToasts.findIndex((t) => t.id === toast.id);
+
+				// Update the toast if it already exists
 				if (existingToastIndex !== -1) {
 					const updatedToasts = [...currentToasts];
 					updatedToasts[existingToastIndex] = { ...updatedToasts[existingToastIndex], ...toast };
@@ -567,9 +598,9 @@ const Toaster = forwardRef<HTMLElement, ToasterProps>(function Toaster(props, re
 							const updatedToasts = [...toasts];
 							updatedToasts[indexOfExistingToast] = { ...updatedToasts[indexOfExistingToast], ...toast };
 							return updatedToasts;
+						} else {
+							return [toast, ...toasts];
 						}
-
-						return [toast, ...toasts];
 					});
 				});
 			});
