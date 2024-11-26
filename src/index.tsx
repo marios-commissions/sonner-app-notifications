@@ -354,6 +354,12 @@ const Toast = (props: ToastProps) => {
 
 				toastRef.current?.style.setProperty('--swipe-amount', `${swipeAmount}px`);
 			}}
+			onContextMenu={(event) => toast.onRightClick?.(toast, event)}
+			onMouseDown={(event) => {
+				if (event.button !== 1) return;
+
+				toast.onMiddleClick?.(toast, event);
+			}}
 		>
 			{closeButton && !toast.jsx ? (
 				<button
