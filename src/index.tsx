@@ -1,20 +1,11 @@
-'use client';
-
 import React, { forwardRef } from 'react';
 import ReactDOM from 'react-dom';
 
+import { isAction, type ExternalToast, type HeightT, type ToasterProps, type ToastProps, type ToastT, type ToastToDismiss, } from './types';
 import { CloseIcon, getAsset } from './assets';
 import { useIsDocumentHidden } from './hooks';
 import { toast, ToastState } from './state';
-import {
-	isAction,
-	type ExternalToast,
-	type HeightT,
-	type ToasterProps,
-	type ToastProps,
-	type ToastT,
-	type ToastToDismiss,
-} from './types';
+
 
 // Visible toasts amount
 const VISIBLE_TOASTS_AMOUNT = 3;
