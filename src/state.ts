@@ -1,238 +1,245 @@
-import type { ExternalToast, PromiseData, PromiseT, ToastT, ToastToDismiss, ToastTypes } from './types';
-
 import React from 'react';
 
-let toastsCounter = 1;
+import type { ExternalToast, PromiseData, PromiseT, ToastT, ToastTypes } from './types';
+import EventEmitter from './emitter';
+
 
 type titleT = (() => React.ReactNode) | React.ReactNode;
 
 class Observer {
-  subscribers: Array<(toast: ExternalToast | ToastToDismiss) => void>;
-  toasts: Array<ToastT | ToastToDismiss>;
+	subscribers: Array<(toast: ExternalToast) => void>;
+	toasts: Array<ToastT>;
 
-  constructor() {
-    this.subscribers = [];
-    this.toasts = [];
-  }
+	constructor() {
+		this.subscribers = [];
+		this.toasts = [];
+	}
 
-  // We use arrow functions to maintain the correct `this` reference
-  subscribe = (subscriber: (toast: ToastT | ToastToDismiss) => void) => {
-    this.subscribers.push(subscriber);
+	// We use arrow functions to maintain the correct `this` reference
+	subscribe = (subscriber: (toast: ToastT) => void) => {
+		this.subscribers.push(subscriber);
 
-    return () => {
-      const index = this.subscribers.indexOf(subscriber);
-      this.subscribers.splice(index, 1);
-    };
-  };
+		return () => {
+			const index = this.subscribers.indexOf(subscriber);
+			this.subscribers.splice(index, 1);
+		};
+	};
 
-  publish = (data: ToastT) => {
-    this.subscribers.forEach((subscriber) => subscriber(data));
-  };
+	publish = (data: ToastT) => {
+		this.subscribers.forEach((subscriber) => subscriber(data));
+	};
 
-  addToast = (data: ToastT) => {
-    this.publish(data);
-    this.toasts = [...this.toasts, data];
-  };
+	addToast = (data: ToastT) => {
+		console.log(data);
+		this.publish(data);
+		this.toasts = [...this.toasts, data];
+	};
 
-  create = (
-    data: ExternalToast & {
-      message?: titleT;
-      type?: ToastTypes;
-      promise?: PromiseT;
-      jsx?: React.ReactElement;
-    },
-  ) => {
-    const { message, ...rest } = data;
-    const id = typeof data?.id === 'number' || data.id?.length > 0 ? data.id : toastsCounter++;
-    const alreadyExists = this.toasts.find((toast) => {
-      return toast.id === id;
-    });
-    const dismissible = data.dismissible === undefined ? true : data.dismissible;
+	create = (
+		data: ExternalToast & {
+			message?: titleT;
+			type?: ToastTypes;
+			promise?: PromiseT;
+			jsx?: React.ReactElement;
+		},
+	) => {
+		const { message, ...rest } = data;
+		const id = typeof data?.id === 'number' || data.id?.length > 0 ? data.id : crypto.randomUUID();
+		const alreadyExists = this.toasts.find((toast) => {
+			return toast.id === id;
+		});
+		const dismissible = data.dismissible === undefined ? true : data.dismissible;
 
-    if (alreadyExists) {
-      this.toasts = this.toasts.map((toast) => {
-        if (toast.id === id) {
-          this.publish({ ...toast, ...data, id, title: message });
-          return {
-            ...toast,
-            ...data,
-            id,
-            dismissible,
-            title: message,
-          };
-        }
+		if (alreadyExists) {
+			this.toasts = this.toasts.map((toast) => {
+				if (toast.id === id) {
+					this.publish({ ...toast, ...data, id, title: message });
+					return {
+						...toast,
+						...data,
+						id,
+						dismissible,
+						title: message,
+					};
+				}
 
-        return toast;
-      });
-    } else {
-      this.addToast({ title: message, ...rest, dismissible, id });
-    }
+				return toast;
+			});
+		} else {
+			this.addToast({ title: message, ...rest, dismissible, id });
+		}
 
-    return id;
-  };
+		return id;
+	};
 
-  dismiss = (id?: number | string) => {
-    if (!id) {
-      this.toasts.forEach((toast) => {
-        this.subscribers.forEach((subscriber) => subscriber({ id: toast.id, dismiss: true }));
-      });
-    }
+	dismiss = (id?: number | string) => {
+		if (!id) {
+			this.toasts.forEach((toast) => {
+				this.subscribers.forEach((subscriber) => subscriber({ ...toast, dismiss: true }));
+			});
+		}
 
-    this.subscribers.forEach((subscriber) => subscriber({ id, dismiss: true }));
-    return id;
-  };
+		const toast = this.toasts.find(t => t.id === id);
+		if (!toast) return false;
 
-  message = (message: titleT | React.ReactNode, data?: ExternalToast) => {
-    return this.create({ ...data, message });
-  };
+		this.subscribers.forEach((subscriber) => subscriber({ ...toast, dismiss: true }));
 
-  error = (message: titleT | React.ReactNode, data?: ExternalToast) => {
-    return this.create({ ...data, message, type: 'error' });
-  };
+		return true;
+	};
 
-  success = (message: titleT | React.ReactNode, data?: ExternalToast) => {
-    return this.create({ ...data, type: 'success', message });
-  };
+	message = (message: titleT | React.ReactNode, data?: ExternalToast) => {
+		return this.create({ ...data, message });
+	};
 
-  info = (message: titleT | React.ReactNode, data?: ExternalToast) => {
-    return this.create({ ...data, type: 'info', message });
-  };
+	error = (message: titleT | React.ReactNode, data?: ExternalToast) => {
+		return this.create({ ...data, message, type: 'error' });
+	};
 
-  warning = (message: titleT | React.ReactNode, data?: ExternalToast) => {
-    return this.create({ ...data, type: 'warning', message });
-  };
+	success = (message: titleT | React.ReactNode, data?: ExternalToast) => {
+		return this.create({ ...data, type: 'success', message });
+	};
 
-  loading = (message: titleT | React.ReactNode, data?: ExternalToast) => {
-    return this.create({ ...data, type: 'loading', message });
-  };
+	info = (message: titleT | React.ReactNode, data?: ExternalToast) => {
+		return this.create({ ...data, type: 'info', message });
+	};
 
-  promise = <ToastData>(promise: PromiseT<ToastData>, data?: PromiseData<ToastData>) => {
-    if (!data) {
-      // Nothing to show
-      return;
-    }
+	warning = (message: titleT | React.ReactNode, data?: ExternalToast) => {
+		return this.create({ ...data, type: 'warning', message });
+	};
 
-    let id: string | number | undefined = undefined;
-    if (data.loading !== undefined) {
-      id = this.create({
-        ...data,
-        promise,
-        type: 'loading',
-        message: data.loading,
-        description: typeof data.description !== 'function' ? data.description : undefined,
-      });
-    }
+	loading = (message: titleT | React.ReactNode, data?: ExternalToast) => {
+		return this.create({ ...data, type: 'loading', message });
+	};
 
-    const p = promise instanceof Promise ? promise : promise();
+	promise = <ToastData>(promise: PromiseT<ToastData>, data?: PromiseData<ToastData>) => {
+		if (!data) {
+			// Nothing to show
+			return;
+		}
 
-    let shouldDismiss = id !== undefined;
-    let result: ['resolve', ToastData] | ['reject', unknown];
+		let id: string | number | undefined = undefined;
+		if (data.loading !== undefined) {
+			id = this.create({
+				...data,
+				promise,
+				type: 'loading',
+				message: data.loading,
+				description: typeof data.description !== 'function' ? data.description : undefined,
+			});
+		}
 
-    const originalPromise = p
-      .then(async (response) => {
-        result = ['resolve', response];
-        const isReactElementResponse = React.isValidElement(response);
-        if (isReactElementResponse) {
-          shouldDismiss = false;
-          this.create({ id, type: 'default', message: response });
-        } else if (isHttpResponse(response) && !response.ok) {
-          shouldDismiss = false;
-          const message =
-            typeof data.error === 'function' ? await data.error(`HTTP error! status: ${response.status}`) : data.error;
-          const description =
-            typeof data.description === 'function'
-              ? await data.description(`HTTP error! status: ${response.status}`)
-              : data.description;
-          this.create({ id, type: 'error', message, description });
-        } else if (data.success !== undefined) {
-          shouldDismiss = false;
-          const message = typeof data.success === 'function' ? await data.success(response) : data.success;
-          const description =
-            typeof data.description === 'function' ? await data.description(response) : data.description;
-          this.create({ id, type: 'success', message, description });
-        }
-      })
-      .catch(async (error) => {
-        result = ['reject', error];
-        if (data.error !== undefined) {
-          shouldDismiss = false;
-          const message = typeof data.error === 'function' ? await data.error(error) : data.error;
-          const description = typeof data.description === 'function' ? await data.description(error) : data.description;
-          this.create({ id, type: 'error', message, description });
-        }
-      })
-      .finally(() => {
-        if (shouldDismiss) {
-          // Toast is still in load state (and will be indefinitely — dismiss it)
-          this.dismiss(id);
-          id = undefined;
-        }
+		const p = promise instanceof Promise ? promise : promise();
 
-        data.finally?.();
-      });
+		let shouldDismiss = id !== undefined;
+		let result: ['resolve', ToastData] | ['reject', unknown];
 
-    const unwrap = () =>
-      new Promise<ToastData>((resolve, reject) =>
-        originalPromise.then(() => (result[0] === 'reject' ? reject(result[1]) : resolve(result[1]))).catch(reject),
-      );
+		const originalPromise = p
+			.then(async (response) => {
+				result = ['resolve', response];
+				const isReactElementResponse = React.isValidElement(response);
+				if (isReactElementResponse) {
+					shouldDismiss = false;
+					this.create({ id, type: 'default', message: response, category: data.category });
+				} else if (isHttpResponse(response) && !response.ok) {
+					shouldDismiss = false;
+					const message =
+						typeof data.error === 'function' ? await data.error(`HTTP error! status: ${response.status}`) : data.error;
+					const description =
+						typeof data.description === 'function'
+							? await data.description(`HTTP error! status: ${response.status}`)
+							: data.description;
+					this.create({ id, type: 'error', message, description, category: data.category });
+				} else if (data.success !== undefined) {
+					shouldDismiss = false;
+					const message = typeof data.success === 'function' ? await data.success(response) : data.success;
+					const description =
+						typeof data.description === 'function' ? await data.description(response) : data.description;
+					this.create({ id, type: 'success', message, description, category: data.category });
+				}
+			})
+			.catch(async (error) => {
+				result = ['reject', error];
+				if (data.error !== undefined) {
+					shouldDismiss = false;
+					const message = typeof data.error === 'function' ? await data.error(error) : data.error;
+					const description = typeof data.description === 'function' ? await data.description(error) : data.description;
+					this.create({ id, type: 'error', message, description, category: data.category });
+				}
+			})
+			.finally(() => {
+				if (shouldDismiss) {
+					// Toast is still in load state (and will be indefinitely — dismiss it)
+					this.dismiss(id);
+					id = undefined;
+				}
 
-    if (typeof id !== 'string' && typeof id !== 'number') {
-      // cannot Object.assign on undefined
-      return { unwrap };
-    } else {
-      return Object.assign(id, { unwrap });
-    }
-  };
+				data.finally?.();
+			});
 
-  custom = (jsx: (id: number | string) => React.ReactElement, data?: ExternalToast) => {
-    const id = data?.id || toastsCounter++;
-    this.create({ jsx: jsx(id), id, ...data });
-    return id;
-  };
+		const unwrap = () =>
+			new Promise<ToastData>((resolve, reject) =>
+				originalPromise.then(() => (result[0] === 'reject' ? reject(result[1]) : resolve(result[1]))).catch(reject),
+			);
+
+		if (typeof id !== 'string' && typeof id !== 'number') {
+			// cannot Object.assign on undefined
+			return { unwrap };
+		} else {
+			return Object.assign(id, { unwrap });
+		}
+	};
+
+	custom = (jsx: (id: number | string) => React.ReactElement, data?: ExternalToast) => {
+		const id = data?.id || crypto.randomUUID();
+		this.create({ jsx: jsx(id), id, ...data });
+		return id;
+	};
 }
 
-export const ToastState = new Observer();
+export const Events = new EventEmitter();
+export const CategoryStates = new Map<PropertyKey, Observer>();
+export const DEFAULT_CATEGORY = Symbol.for('sonner.default');
 
 // bind this to the toast function
-const toastFunction = (message: titleT, data?: ExternalToast) => {
-  const id = data?.id || toastsCounter++;
+export const toast = (message: titleT, data?: ExternalToast) => {
+	const id = data?.id || crypto.randomUUID();
 
-  ToastState.addToast({
-    title: message,
-    ...data,
-    id,
-  });
-  return id;
+	data.category ??= DEFAULT_CATEGORY;
+
+	if (!CategoryStates.has(data.category)) {
+		CategoryStates.set(data.category, new Observer());
+
+		Events.emit('add-category', data.category);
+	}
+
+	const category = CategoryStates.get(data.category);
+	const method = category[data.type ?? 'addToast'].bind(category);
+
+	method({
+		title: message,
+		...data,
+		id,
+	});
+
+	return id;
+};
+
+export const dismissToast = (id: ExternalToast['id'], category?: PropertyKey): boolean => {
+	const observer = CategoryStates.get(category);
+	if (!observer) return false;
+
+	observer.dismiss(id);
+
+	return true;
 };
 
 const isHttpResponse = (data: any): data is Response => {
-  return (
-    data &&
-    typeof data === 'object' &&
-    'ok' in data &&
-    typeof data.ok === 'boolean' &&
-    'status' in data &&
-    typeof data.status === 'number'
-  );
+	return (
+		data &&
+		typeof data === 'object' &&
+		'ok' in data &&
+		typeof data.ok === 'boolean' &&
+		'status' in data &&
+		typeof data.status === 'number'
+	);
 };
-
-const basicToast = toastFunction;
-
-const getHistory = () => ToastState.toasts;
-
-// We use `Object.assign` to maintain the correct types as we would lose them otherwise
-export const toast = Object.assign(
-  basicToast,
-  {
-    success: ToastState.success,
-    info: ToastState.info,
-    warning: ToastState.warning,
-    error: ToastState.error,
-    custom: ToastState.custom,
-    message: ToastState.message,
-    promise: ToastState.promise,
-    dismiss: ToastState.dismiss,
-    loading: ToastState.loading,
-  },
-  { getHistory },
-);

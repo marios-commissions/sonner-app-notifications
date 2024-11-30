@@ -55,6 +55,12 @@ export interface Action {
 
 export interface ToastT {
 	id: number | string;
+	category: PropertyKey;
+	accent?: string;
+
+	/** @private */
+	dismiss?: boolean;
+
 	title?: (() => React.ReactNode) | React.ReactNode;
 	type?: ToastTypes;
 	icon?: React.ReactNode;
@@ -183,6 +189,8 @@ export interface ToastToDismiss {
 	dismiss: boolean;
 }
 
-export type ExternalToast = Omit<ToastT, 'id' | 'type' | 'title' | 'jsx' | 'delete' | 'promise'> & {
+export type ExternalToast = Omit<ToastT, 'type' | 'id' | 'title' | 'jsx' | 'delete' | 'promise'> & {
 	id?: number | string;
+	category?: PropertyKey;
+	type?: ToastTypes;
 };

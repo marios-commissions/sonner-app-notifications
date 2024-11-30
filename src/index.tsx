@@ -1,10 +1,9 @@
 import React, { forwardRef } from 'react';
-import ReactDOM from 'react-dom';
 
-import { isAction, type ExternalToast, type HeightT, type ToasterProps, type ToastProps, type ToastT, type ToastToDismiss, } from './types';
+import { isAction, type ExternalToast, type HeightT, type ToasterProps, type ToastProps, type ToastT } from './types';
+import { CategoryStates, DEFAULT_CATEGORY, dismissToast, Events, toast } from './state';
 import { CloseIcon, getAsset } from './assets';
 import { useIsDocumentHidden } from './hooks';
-import { toast, ToastState } from './state';
 
 
 // Visible toasts amount
@@ -32,7 +31,7 @@ function _cn(...classes: (string | undefined)[]) {
 	return classes.filter(Boolean).join(' ');
 }
 
-const Toast = (props: ToastProps) => {
+const Toast: React.FC<ToastProps> = (props: ToastProps) => {
 	const {
 		invert: ToasterInvert,
 		toast,
@@ -463,7 +462,7 @@ const Toast = (props: ToastProps) => {
 					left: 0,
 					right: 0,
 					height: '3px',
-					backgroundColor: 'var(--brand-500)',
+					backgroundColor: toast.accent ?? 'var(--brand-500)',
 					transformOrigin: 'left',
 					transform: `scaleX(${Math.max(0, remainingTimeState / duration)})`,
 					opacity: 0.8,
@@ -492,27 +491,48 @@ function getDocumentDirection(): ToasterProps['dir'] {
 }
 
 function useSonner() {
-	const [activeToasts, setActiveToasts] = React.useState<ToastT[]>([]);
+	const [activeToasts, setActiveToasts] = React.useState<Record<PropertyKey, ToastT[]>>({ [DEFAULT_CATEGORY]: [] });
 
 	React.useEffect(() => {
-		return ToastState.subscribe((toast) => {
-			setActiveToasts((currentToasts) => {
+		const unsubscribes: (() => void)[] = [];
+
+		const createCategorySubscriber = (category: PropertyKey) => (toast) => {
+			setActiveToasts((current): Record<PropertyKey, ToastT[]> => {
+				const store = current[category as keyof typeof current] ?? [];
+
 				if ('dismiss' in toast && toast.dismiss) {
-					return currentToasts.filter((t) => t.id !== toast.id);
+					return { ...current, [category]: store.filter((t) => t.id !== toast.id) };
 				}
 
-				const existingToastIndex = currentToasts.findIndex((t) => t.id === toast.id);
+				const existingToastIndex = store.findIndex((t) => t.id === toast.id);
 
 				// Update the toast if it already exists
-				if (existingToastIndex !== -1) {
-					const updatedToasts = [...currentToasts];
+				if (existingToastIndex !== void 0 && existingToastIndex !== -1) {
+					const updatedToasts = [...store];
 					updatedToasts[existingToastIndex] = { ...updatedToasts[existingToastIndex], ...toast };
-					return updatedToasts;
+
+					return { ...current, [category]: updatedToasts };
 				} else {
-					return [toast, ...currentToasts];
+					return { ...current, [category]: [toast, ...store] };
 				}
 			});
-		});
+		};
+
+		for (const [category, observer] of [...CategoryStates.entries()]) {
+			unsubscribes.push(observer.subscribe(createCategorySubscriber(category)));
+		}
+
+		function onCategoryAdd(category: string) {
+			const observer = CategoryStates.get(category);
+			if (!observer) return;
+
+			unsubscribes.push(observer.subscribe(createCategorySubscriber(category)));
+		}
+
+		Events.on('add-category', onCategoryAdd);
+		unsubscribes.push(() => Events.off('add-category', onCategoryAdd));
+
+		return () => void unsubscribes.map(u => u());
 	}, []);
 
 	return {
@@ -543,10 +563,11 @@ const Toaster = forwardRef<HTMLElement, ToasterProps>(function Toaster(props, re
 		pauseWhenPageIsHidden,
 		cn = _cn,
 	} = props;
-	const [toasts, setToasts] = React.useState<ToastT[]>([]);
+	// const [toasts, setToasts] = React.useState<ToastT[]>([]);
+	const { toasts } = useSonner();
 	const possiblePositions = React.useMemo(() => {
 		return Array.from(
-			new Set([position].concat(toasts.filter((toast) => toast.position).map((toast) => toast.position))),
+			new Set([position].concat(toasts[DEFAULT_CATEGORY].filter((toast) => toast.position).map((toast) => toast.position))),
 		);
 	}, [toasts, position]);
 	const [heights, setHeights] = React.useState<HeightT[]>([]);
@@ -568,41 +589,48 @@ const Toaster = forwardRef<HTMLElement, ToasterProps>(function Toaster(props, re
 	const isFocusWithinRef = React.useRef(false);
 
 	const removeToast = React.useCallback((toastToRemove: ToastT) => {
-		setToasts((toasts) => {
-			if (!toasts.find((toast) => toast.id === toastToRemove.id)?.delete) {
-				ToastState.dismiss(toastToRemove.id);
-			}
+		dismissToast(toastToRemove.id, toastToRemove.category);
+		// setToasts((toasts) => {
+		// 	if (!toasts.find((toast) => toast.id === toastToRemove.id)?.delete) {
+		// 		dismissToast(toastToRemove.id,);
+		// 	}
 
-			return toasts.filter(({ id }) => id !== toastToRemove.id);
-		});
+		// 	return toasts.filter(({ id }) => id !== toastToRemove.id);
+		// });
 	}, []);
+
+	// const removeToast = React.useCdismissToast;
+
+	// React.useEffect(() => {
+	// 	return ToastState.subscribe((toast) => {
+	// 		if ((toast as ToastToDismiss).dismiss) {
+	// 			setToasts((toasts) => toasts.map((t) => (t.id === toast.id ? { ...t, delete: true } : t)));
+	// 			return;
+	// 		}
+
+	// 		// Prevent batching, temp solution.
+	// 		setTimeout(() => {
+	// 			ReactDOM.flushSync(() => {
+	// 				setToasts((toasts) => {
+	// 					const indexOfExistingToast = toasts.findIndex((t) => t.id === toast.id);
+
+	// 					// Update the toast if it already exists
+	// 					if (indexOfExistingToast !== -1) {
+	// 						const updatedToasts = [...toasts];
+	// 						updatedToasts[indexOfExistingToast] = { ...updatedToasts[indexOfExistingToast], ...toast };
+	// 						return updatedToasts;
+	// 					} else {
+	// 						return [toast, ...toasts];
+	// 					}
+	// 				});
+	// 			});
+	// 		});
+	// 	});
+	// }, []);
 
 	React.useEffect(() => {
-		return ToastState.subscribe((toast) => {
-			if ((toast as ToastToDismiss).dismiss) {
-				setToasts((toasts) => toasts.map((t) => (t.id === toast.id ? { ...t, delete: true } : t)));
-				return;
-			}
-
-			// Prevent batching, temp solution.
-			setTimeout(() => {
-				ReactDOM.flushSync(() => {
-					setToasts((toasts) => {
-						const indexOfExistingToast = toasts.findIndex((t) => t.id === toast.id);
-
-						// Update the toast if it already exists
-						if (indexOfExistingToast !== -1) {
-							const updatedToasts = [...toasts];
-							updatedToasts[indexOfExistingToast] = { ...updatedToasts[indexOfExistingToast], ...toast };
-							return updatedToasts;
-						} else {
-							return [toast, ...toasts];
-						}
-					});
-				});
-			});
-		});
-	}, []);
+		console.log(toasts);
+	}, [toasts]);
 
 	React.useEffect(() => {
 		if (theme !== 'system') {
@@ -651,7 +679,7 @@ const Toaster = forwardRef<HTMLElement, ToasterProps>(function Toaster(props, re
 
 	React.useEffect(() => {
 		// Ensure expanded is always false when no toasts are present / only one left
-		if (toasts.length <= 1) {
+		if (toasts[DEFAULT_CATEGORY].length <= 1) {
 			setExpanded(false);
 		}
 	}, [toasts]);
@@ -693,110 +721,204 @@ const Toaster = forwardRef<HTMLElement, ToasterProps>(function Toaster(props, re
 		// Remove item from normal navigation flow, only available via hotkey
 		<section
 			aria-label={`${containerAriaLabel} ${hotkeyLabel}`}
+			data-sonner-toaster={true}
 			tabIndex={-1}
-			aria-live="polite"
-			aria-relevant="additions text"
-			aria-atomic="false"
+			aria-live='polite'
+			aria-relevant='additions text'
+			aria-atomic='false'
 		>
 			{possiblePositions.map((position, index) => {
 				const [y, x] = position.split('-');
 
-				if (!toasts.length) return null;
-
-				return (
-					<ol
-						key={position}
-						dir={dir === 'auto' ? getDocumentDirection() : dir}
-						tabIndex={-1}
-						ref={listRef}
-						className={className}
-						data-sonner-toaster
-						data-theme={actualTheme}
-						data-y-position={y}
-						data-lifted={expanded && toasts.length > 1 && !expand}
-						data-x-position={x}
-						style={
-							{
-								'--front-toast-height': `${heights[0]?.height || 0}px`,
-								'--offset': typeof offset === 'number' ? `${offset}px` : offset || VIEWPORT_OFFSET,
-								'--width': `${TOAST_WIDTH}px`,
-								'--gap': `${gap}px`,
-								...style,
-							} as React.CSSProperties
+				// if (!toasts[DEFAULT_CATEGORY].length) return null;
+				return Reflect.ownKeys(toasts).map(category => toasts[category]?.length && <ol
+					// data-category={category.toString()}
+					key={position}
+					dir={dir === 'auto' ? getDocumentDirection() : dir}
+					tabIndex={-1}
+					ref={listRef}
+					className={className}
+					data-sonner-toaster
+					data-theme={actualTheme}
+					data-y-position={y}
+					data-lifted={expanded && toasts[category].length > 1 && !expand}
+					data-x-position={x}
+					style={
+						{
+							'--front-toast-height': `${heights[0]?.height || 0}px`,
+							'--offset': typeof offset === 'number' ? `${offset}px` : offset || VIEWPORT_OFFSET,
+							'--width': `${TOAST_WIDTH}px`,
+							'--gap': `${gap}px`,
+							...style,
+						} as React.CSSProperties
+					}
+					onBlur={(event) => {
+						if (isFocusWithinRef.current && !event.currentTarget.contains(event.relatedTarget)) {
+							isFocusWithinRef.current = false;
+							if (lastFocusedElementRef.current) {
+								lastFocusedElementRef.current.focus({ preventScroll: true });
+								lastFocusedElementRef.current = null;
+							}
 						}
-						onBlur={(event) => {
-							if (isFocusWithinRef.current && !event.currentTarget.contains(event.relatedTarget)) {
-								isFocusWithinRef.current = false;
-								if (lastFocusedElementRef.current) {
-									lastFocusedElementRef.current.focus({ preventScroll: true });
-									lastFocusedElementRef.current = null;
-								}
-							}
-						}}
-						onFocus={(event) => {
-							const isNotDismissible =
-								event.target instanceof HTMLElement && event.target.dataset.dismissible === 'false';
+					}}
+					onFocus={(event) => {
+						const isNotDismissible =
+							event.target instanceof HTMLElement && event.target.dataset.dismissible === 'false';
 
-							if (isNotDismissible) return;
+						if (isNotDismissible) return;
 
-							if (!isFocusWithinRef.current) {
-								isFocusWithinRef.current = true;
-								lastFocusedElementRef.current = event.relatedTarget as HTMLElement;
-							}
-						}}
-						onMouseEnter={() => setExpanded(true)}
-						onMouseMove={() => setExpanded(true)}
-						onMouseLeave={() => {
-							// Avoid setting expanded to false when interacting with a toast, e.g. swiping
-							if (!interacting) {
-								setExpanded(false);
-							}
-						}}
-						onPointerDown={(event) => {
-							const isNotDismissible =
-								event.target instanceof HTMLElement && event.target.dataset.dismissible === 'false';
+						if (!isFocusWithinRef.current) {
+							isFocusWithinRef.current = true;
+							lastFocusedElementRef.current = event.relatedTarget as HTMLElement;
+						}
+					}}
+					onMouseEnter={() => setExpanded(true)}
+					onMouseMove={() => setExpanded(true)}
+					onMouseLeave={() => {
+						// Avoid setting expanded to false when interacting with a toast, e.g. swiping
+						if (!interacting) {
+							setExpanded(false);
+						}
+					}}
+					onPointerDown={(event) => {
+						const isNotDismissible =
+							event.target instanceof HTMLElement && event.target.dataset.dismissible === 'false';
 
-							if (isNotDismissible) return;
-							setInteracting(true);
-						}}
-						onPointerUp={() => setInteracting(false)}
-					>
-						{toasts
-							.filter((toast) => (!toast.position && index === 0) || toast.position === position)
-							.map((toast, index) => (
-								<Toast
-									key={toast.id}
-									icons={icons}
-									index={index}
-									toast={toast}
-									defaultRichColors={richColors}
-									duration={toastOptions?.duration ?? duration}
-									className={toastOptions?.className}
-									descriptionClassName={toastOptions?.descriptionClassName}
-									invert={invert}
-									visibleToasts={visibleToasts}
-									closeButton={toastOptions?.closeButton ?? closeButton}
-									interacting={interacting}
-									position={position}
-									style={toastOptions?.style}
-									unstyled={toastOptions?.unstyled}
-									classNames={toastOptions?.classNames}
-									cancelButtonStyle={toastOptions?.cancelButtonStyle}
-									actionButtonStyle={toastOptions?.actionButtonStyle}
-									removeToast={removeToast}
-									toasts={toasts.filter((t) => t.position == toast.position)}
-									heights={heights.filter((h) => h.position == toast.position)}
-									setHeights={setHeights}
-									expandByDefault={expand}
-									gap={gap}
-									loadingIcon={loadingIcon}
-									expanded={expanded}
-									pauseWhenPageIsHidden={pauseWhenPageIsHidden}
-									cn={cn}
-								/>
-							))}
-					</ol>
-				);
+						if (isNotDismissible) return;
+						setInteracting(true);
+					}}
+					onPointerUp={() => setInteracting(false)}
+				>
+					{toasts[category]
+						.filter((toast) => (!toast.position && index === 0) || toast.position === position)
+						.map((toast, index) => (
+							<Toast
+								key={toast.id}
+								icons={icons}
+								index={index}
+								toast={toast}
+								defaultRichColors={richColors}
+								duration={toastOptions?.duration ?? duration}
+								className={toastOptions?.className}
+								descriptionClassName={toastOptions?.descriptionClassName}
+								invert={invert}
+								visibleToasts={visibleToasts}
+								closeButton={toastOptions?.closeButton ?? closeButton}
+								interacting={interacting}
+								position={position}
+								style={toastOptions?.style}
+								unstyled={toastOptions?.unstyled}
+								classNames={toastOptions?.classNames}
+								cancelButtonStyle={toastOptions?.cancelButtonStyle}
+								actionButtonStyle={toastOptions?.actionButtonStyle}
+								removeToast={removeToast}
+								toasts={toasts[category].filter((t) => t.position == toast.position)}
+								heights={heights.filter((h) => h.position == toast.position)}
+								setHeights={setHeights}
+								expandByDefault={expand}
+								gap={gap}
+								loadingIcon={loadingIcon}
+								expanded={expanded}
+								pauseWhenPageIsHidden={pauseWhenPageIsHidden}
+								cn={cn}
+							/>
+						))}
+				</ol>);
+
+				// return (
+				// 	<ol
+				// 		key={position}
+				// 		dir={dir === 'auto' ? getDocumentDirection() : dir}
+				// 		tabIndex={-1}
+				// 		ref={listRef}
+				// 		className={className}
+				// 		data-sonner-toaster
+				// 		data-theme={actualTheme}
+				// 		data-y-position={y}
+				// 		data-lifted={expanded && toasts[DEFAULT_CATEGORY].length > 1 && !expand}
+				// 		data-x-position={x}
+				// 		style={
+				// 			{
+				// 				'--front-toast-height': `${heights[0]?.height || 0}px`,
+				// 				'--offset': typeof offset === 'number' ? `${offset}px` : offset || VIEWPORT_OFFSET,
+				// 				'--width': `${TOAST_WIDTH}px`,
+				// 				'--gap': `${gap}px`,
+				// 				...style,
+				// 			} as React.CSSProperties
+				// 		}
+				// 		onBlur={(event) => {
+				// 			if (isFocusWithinRef.current && !event.currentTarget.contains(event.relatedTarget)) {
+				// 				isFocusWithinRef.current = false;
+				// 				if (lastFocusedElementRef.current) {
+				// 					lastFocusedElementRef.current.focus({ preventScroll: true });
+				// 					lastFocusedElementRef.current = null;
+				// 				}
+				// 			}
+				// 		}}
+				// 		onFocus={(event) => {
+				// 			const isNotDismissible =
+				// 				event.target instanceof HTMLElement && event.target.dataset.dismissible === 'false';
+
+				// 			if (isNotDismissible) return;
+
+				// 			if (!isFocusWithinRef.current) {
+				// 				isFocusWithinRef.current = true;
+				// 				lastFocusedElementRef.current = event.relatedTarget as HTMLElement;
+				// 			}
+				// 		}}
+				// 		onMouseEnter={() => setExpanded(true)}
+				// 		onMouseMove={() => setExpanded(true)}
+				// 		onMouseLeave={() => {
+				// 			// Avoid setting expanded to false when interacting with a toast, e.g. swiping
+				// 			if (!interacting) {
+				// 				setExpanded(false);
+				// 			}
+				// 		}}
+				// 		onPointerDown={(event) => {
+				// 			const isNotDismissible =
+				// 				event.target instanceof HTMLElement && event.target.dataset.dismissible === 'false';
+
+				// 			if (isNotDismissible) return;
+				// 			setInteracting(true);
+				// 		}}
+				// 		onPointerUp={() => setInteracting(false)}
+				// 	>
+				// 		{toasts[DEFAULT_CATEGORY]
+				// 			.filter((toast) => (!toast.position && index === 0) || toast.position === position)
+				// 			.map((toast, index) => (
+				// 				<Toast
+				// 					key={toast.id}
+				// 					icons={icons}
+				// 					index={index}
+				// 					toast={toast}
+				// 					defaultRichColors={richColors}
+				// 					duration={toastOptions?.duration ?? duration}
+				// 					className={toastOptions?.className}
+				// 					descriptionClassName={toastOptions?.descriptionClassName}
+				// 					invert={invert}
+				// 					visibleToasts={visibleToasts}
+				// 					closeButton={toastOptions?.closeButton ?? closeButton}
+				// 					interacting={interacting}
+				// 					position={position}
+				// 					style={toastOptions?.style}
+				// 					unstyled={toastOptions?.unstyled}
+				// 					classNames={toastOptions?.classNames}
+				// 					cancelButtonStyle={toastOptions?.cancelButtonStyle}
+				// 					actionButtonStyle={toastOptions?.actionButtonStyle}
+				// 					removeToast={removeToast}
+				// 					toasts={toasts[DEFAULT_CATEGORY].filter((t) => t.position == toast.position)}
+				// 					heights={heights.filter((h) => h.position == toast.position)}
+				// 					setHeights={setHeights}
+				// 					expandByDefault={expand}
+				// 					gap={gap}
+				// 					loadingIcon={loadingIcon}
+				// 					expanded={expanded}
+				// 					pauseWhenPageIsHidden={pauseWhenPageIsHidden}
+				// 					cn={cn}
+				// 				/>
+				// 			))}
+				// 	</ol>
+				// );
 			})}
 		</section>
 	);
